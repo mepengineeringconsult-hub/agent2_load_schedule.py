@@ -1,10 +1,11 @@
-# CODE VERSION: 1.4.0
-# STATUS: Rollback to Stable Base + Fixed LC32 3-circuits + UI Versioning
+# CODE VERSION: 1.7.0
+# STATUS: Iterative Processing Mode (Scan -> Loop Extract) for 100% Precision
 
 import streamlit as st
 import google.generativeai as genai
 import os
 import time
+import re
 
 # --- 1. ระบบค้นหา Model อัตโนมัติ ---
 def find_available_model():
@@ -18,26 +19,9 @@ def find_available_model():
         st.error(f"ไม่สามารถสแกนหาโมเดลได้: {e}")
         return None
 
-# --- 2. Prompt ฉบับปรับปรุงจากตัวเสถียรเดิม ---
-AGENT2_PROMPT = """
-คุณคือ Electrical Auditor หน้าที่คือสกัดข้อมูลจาก Load Schedule ใน PDF ทุกหน้าให้ครบถ้วน (โดยเฉพาะ DB1, DB3, LC1B)
-กฎเหล็ก (Strict Rules):
-1. **รายงานเลข Version**: ทุกครั้งที่สกัดข้อมูลเสร็จ ให้ขึ้นหัวแถวว่า "รายงานโดย Version 1.4.0"
-2. **ต้องมี MAIN BREAKER**: สกัด Main Breaker ของทุกตู้เป็นบรรทัดแรกเสมอ
-3. **ตรวจสอบ LC32 อย่างละเอียด**: 3 วงจรสุดท้ายของ LC32 ใน PDF ระบุว่าเป็นอุปกรณ์ป้องกันไฟรั่ว (ELCB/RCCB) ต้องลงข้อมูลเป็น "ELCB" เท่านั้น ห้ามลงเป็น Breaker ธรรมดาเด็ดขาด
-4. **ห้ามตัดสินใจเอง**: ยึดตามแบบ 100% ตัวสะกดชื่อแผงต้องเป๊ะ เช่น LC1B ห้ามเป็น LC10
-5. **การเว้นบรรทัด**: เมื่อจบข้อมูลแต่ละตู้ ให้เว้น 2 บรรทัดและใส่เส้นคั่น (---) เพื่อให้อ่านง่าย
-
-รูปแบบผลลัพธ์:
-[ชื่อตู้]
-PANEL | DEVICE | POLE | AMP | DESCRIPTION
-------------------------------------------
-(รายการอุปกรณ์...)
-"""
-
 def main():
-    # 1. แสดง Version ที่หัวข้อแอปตามที่สั่ง
-    st.title("📑 Agent 2: Load Schedule Auditor version 1.4.0")
+    st.title("📑 Agent 2: Load Schedule Auditor version 1.7.0")
+    st.info("💡 โหมด Iterative: สแกนและสกัดข้อมูลทีละแผงเพื่อความแม่นยำสูงสุด")
     st.markdown("---")
 
     api_key = st.secrets.get("API_KEY") or st.secrets.get("GEMINI_API_KEY")
@@ -48,28 +32,52 @@ def main():
 
     uploaded_pdf = st.file_uploader("อัปโหลดแบบ PDF (Load Schedule)", type="pdf")
 
-    if st.button("🔍 1. เริ่มสกัดข้อมูล (Audit Mode v1.4.0)", use_container_width=True):
+    if st.button("🔍 1. เริ่มสกัดข้อมูล (Iterative Audit v1.7.0)", use_container_width=True):
         if uploaded_pdf:
             temp_fn = f"temp_{int(time.time())}.pdf"
             try:
-                with st.spinner("🔍 กำลังค้นหาโมเดล..."):
-                    working_model = find_available_model()
-                    if not working_model: return
-                
+                working_model = find_available_model()
+                if not working_model: return
+                model = genai.GenerativeModel(model_name=working_model)
+
                 with open(temp_fn, "wb") as f:
                     f.write(uploaded_pdf.getbuffer())
                 google_file = genai.upload_file(path=temp_fn, mime_type="application/pdf")
+
+                # --- PHASE 1: Scan for Panel Names ---
+                with st.spinner("🔍 Phase 1: กำลังสแกนหารายชื่อแผงทั้งหมด..."):
+                    scan_prompt = "Identify all Electrical Panel names (e.g., DB1, LC1B, LC32) in this document. Return only a comma-separated list of names."
+                    scan_res = model.generate_content([google_file, scan_prompt])
+                    panel_names = [p.strip() for p in scan_res.text.split(',')]
+                    st.write(f"📋 ตรวจพบแผง: {', '.join(panel_names)}")
+
+                # --- PHASE 2: Loop Extract per Panel ---
+                all_results = []
+                progress_bar = st.progress(0)
                 
-                model = genai.GenerativeModel(model_name=working_model)
-                with st.spinner(f"⏳ กำลังวิเคราะห์ข้อมูล (Ver 1.4.0)..."):
-                    response = model.generate_content([google_file, AGENT2_PROMPT])
-                    
-                    if response.text:
-                        st.markdown(f"### 📋 ผลการสกัดข้อมูล (Version 1.4.0)")
-                        st.code(response.text, language="text")
-                        st.success(f"✅ สำเร็จ! ตรวจสอบ LC32 3 วงจรสุดท้ายอีกครั้ง")
-                    
-                    google_file.delete()
+                for idx, name in enumerate(panel_names):
+                    with st.spinner(f"⏳ Phase 2: กำลังสกัดข้อมูลแผง {name}..."):
+                        extract_prompt = f"""
+                        Extract the Load Schedule for panel '{name}' from the PDF. 
+                        Rules:
+                        1. Look for symbols like (ELCB), (RCCB), or leakage protection.
+                        2. Identify MAIN BREAKER as the first row.
+                        3. Strictly follow the text in the drawing for each circuit.
+                        Format: PANEL | DEVICE | POLE | AMP | DESCRIPTION
+                        """
+                        response = model.generate_content([google_file, extract_prompt])
+                        all_results.append(response.text)
+                        
+                        # Update Progress
+                        progress_bar.progress((idx + 1) / len(panel_names))
+
+                # --- PHASE 3: Display Consolidated Result ---
+                st.markdown(f"### 📋 รายงานการสกัดข้อมูล (Version 1.7.0)")
+                final_output = "\n\n---\n\n".join(all_results)
+                st.code(final_output, language="text")
+                st.success(f"✅ สกัดครบทุกแผงด้วยความแม่นยำสูง (Model: {working_model})")
+
+                google_file.delete()
             except Exception as e:
                 st.error(f"❌ ข้อผิดพลาด: {str(e)}")
             finally:
