@@ -1,5 +1,5 @@
-# CODE VERSION: 2.1.0
-# STATUS: Iterative Mode + Multi-Column Cross-Check (Fixing LC32 Circuit 14, 16, 18)
+# CODE VERSION: 2.2.0
+# STATUS: Iterative Mode + Multi-Column Check (Universal Precision)
 
 import streamlit as st
 import google.generativeai as genai
@@ -18,9 +18,9 @@ def find_available_model():
         return None
 
 def main():
-    # รายงาน Version บนหน้าจอ Streamlit ตามสั่ง
-    st.title("📑 Agent 2: Load Schedule Auditor version 2.1.0")
-    st.info("💡 โหมดตรวจสอบละเอียด: Cross-check ทุกคอลัมน์เพื่อหา ELCB/RCCB")
+    # 1. รายงานเวอร์ชันที่หน้าจอ Streamlit ตามสั่ง
+    st.title("📑 Agent 2: Load Schedule Auditor version 2.2.0")
+    st.info("💡 โหมดตรวจสอบละเอียด: สแกนสัญลักษณ์ ELCB/RCCB จากทุกคอลัมน์ในทุกวงจร")
     st.markdown("---")
 
     api_key = st.secrets.get("API_KEY") or st.secrets.get("GEMINI_API_KEY")
@@ -31,7 +31,7 @@ def main():
 
     uploaded_pdf = st.file_uploader("อัปโหลดแบบ PDF (Load Schedule)", type="pdf")
 
-    if st.button("🔍 เริ่มสกัดข้อมูล (Audit v2.1.0)", use_container_width=True):
+    if st.button("🔍 เริ่มสกัดข้อมูล (Audit v2.2.0)", use_container_width=True):
         if uploaded_pdf:
             temp_fn = f"temp_{int(time.time())}.pdf"
             try:
@@ -43,27 +43,27 @@ def main():
                     f.write(uploaded_pdf.getbuffer())
                 google_file = genai.upload_file(path=temp_fn, mime_type="application/pdf")
 
-                # --- PHASE 1: Scan for Panel Names ---
-                with st.spinner("🔍 Phase 1: กำลังสแกนหาชื่อแผงทั้งหมด..."):
-                    scan_prompt = "List all electrical panel names in this PDF (e.g. DB1, LC32). Return as comma-separated list."
+                # PHASE 1: Scan for Panel Names
+                with st.spinner("🔍 Phase 1: กำลังค้นหาแผงทั้งหมด..."):
+                    scan_prompt = "List all electrical panel names in this PDF. Return as comma-separated list."
                     scan_res = model.generate_content([google_file, scan_prompt])
                     panel_names = [p.strip() for p in scan_res.text.split(',') if p.strip()]
-                    st.write(f"📋 แผงที่ตรวจพบ: {', '.join(panel_names)}")
+                    st.write(f"📋 ตรวจพบแผง: {', '.join(panel_names)}")
 
-                # --- PHASE 2: Detailed Loop Extract ---
+                # PHASE 2: Detailed Loop Extract
                 all_results = []
                 progress_bar = st.progress(0)
                 
                 for idx, name in enumerate(panel_names):
                     with st.spinner(f"⏳ Phase 2: กำลังสกัดข้อมูลแผง {name}..."):
-                        # ปรับ Prompt ให้ Cross-check ข้อความ ELCB จากทุกที่ในบรรทัด
+                        # ปรับ Prompt ให้ตรวจสอบทุกวงจรและทุกคอลัมน์อย่างละเอียด
                         extract_prompt = f"""
                         Extract the Load Schedule for panel '{name}'.
-                        STRICT RULES for Device Type Identification:
-                        1. **Search Everywhere**: Look at BOTH the 'Device' column and 'Description/Remarks' column for each circuit.
-                        2. **ELCB Priority**: If the word 'ELCB', 'RCCB', 'RCD', or 'Safety Breaker' appears ANYWHERE in the row (even in the description), you MUST label the device as 'ELCB'.
-                        3. **Verify LC32 Circuits**: Pay extreme attention to circuits 14, 16, and 18. If they are used for Receptacles/Kitchen and have ELCB markings, they must be 'ELCB'.
-                        4. **Main Breaker**: Always include the Main Breaker as the first line.
+                        STRICT EXTRACTION RULES:
+                        1. **Scan Every Line**: Check every circuit row for symbols like (ELCB), (RCCB), or text 'leakage protection' in BOTH the Device and Description columns.
+                        2. **Universal Detection**: If any leakage protection is mentioned for a circuit, you MUST label it as 'ELCB'.
+                        3. **Main Breaker**: Always list the Main Breaker as the first line of each panel.
+                        4. **Zero Guessing**: Report exactly what is shown in the drawing. Do not assume device type based on circuit name.
                         
                         Format: PANEL | DEVICE | POLE | AMP | DESCRIPTION
                         """
@@ -71,10 +71,10 @@ def main():
                         all_results.append(response.text)
                         progress_bar.progress((idx + 1) / len(panel_names))
 
-                # --- PHASE 3: Display ---
-                st.markdown(f"### 📋 รายงานการสกัดข้อมูล (Version 2.1.0)")
+                # PHASE 3: Display consolidated result
+                st.markdown(f"### 📋 รายงานการสกัดข้อมูล (Version 2.2.0)")
                 st.code("\n\n---\n\n".join(all_results), language="text")
-                st.success(f"✅ สำเร็จ! โปรดตรวจสอบวงจร 14, 16, 18 ของ LC32 อีกครั้ง")
+                st.success(f"✅ ประมวลผลสำเร็จด้วยมาตรฐานความแม่นยำรายบรรทัด")
 
                 google_file.delete()
             except Exception as e:
