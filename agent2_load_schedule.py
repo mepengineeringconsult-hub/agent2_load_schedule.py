@@ -1,13 +1,12 @@
-# CODE VERSION: 1.7.0
-# STATUS: Iterative Processing Mode (Scan -> Loop Extract) for 100% Precision
+# CODE VERSION: 1.9.0
+# STATUS: Iterative Processing + Universal Device Detection (No Hard-coding)
 
 import streamlit as st
 import google.generativeai as genai
 import os
 import time
-import re
 
-# --- 1. ระบบค้นหา Model อัตโนมัติ ---
+# --- 1. ระบบสแกนหาโมเดลที่ใช้งานได้จริงอัตโนมัติ ---
 def find_available_model():
     try:
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
@@ -20,8 +19,9 @@ def find_available_model():
         return None
 
 def main():
-    st.title("📑 Agent 2: Load Schedule Auditor version 1.7.0")
-    st.info("💡 โหมด Iterative: สแกนและสกัดข้อมูลทีละแผงเพื่อความแม่นยำสูงสุด")
+    # รายงานชื่อแอปและเวอร์ชันที่หน้าจอ Streamlit ตามความต้องการของคุณ
+    st.title("📑 Agent 2: Load Schedule Auditor version 1.9.0")
+    st.info("💡 Iterative Mode: ตรวจสอบสัญลักษณ์อุปกรณ์ป้องกันไฟรั่วอย่างละเอียดทุกวงจร")
     st.markdown("---")
 
     api_key = st.secrets.get("API_KEY") or st.secrets.get("GEMINI_API_KEY")
@@ -32,7 +32,7 @@ def main():
 
     uploaded_pdf = st.file_uploader("อัปโหลดแบบ PDF (Load Schedule)", type="pdf")
 
-    if st.button("🔍 1. เริ่มสกัดข้อมูล (Iterative Audit v1.7.0)", use_container_width=True):
+    if st.button("🔍 เริ่มสกัดข้อมูล (Iterative Audit v1.9.0)", use_container_width=True):
         if uploaded_pdf:
             temp_fn = f"temp_{int(time.time())}.pdf"
             try:
@@ -45,37 +45,38 @@ def main():
                 google_file = genai.upload_file(path=temp_fn, mime_type="application/pdf")
 
                 # --- PHASE 1: Scan for Panel Names ---
-                with st.spinner("🔍 Phase 1: กำลังสแกนหารายชื่อแผงทั้งหมด..."):
-                    scan_prompt = "Identify all Electrical Panel names (e.g., DB1, LC1B, LC32) in this document. Return only a comma-separated list of names."
+                with st.spinner("🔍 Phase 1: กำลังสแกนหารายชื่อแผงไฟฟ้าทั้งหมด..."):
+                    scan_prompt = "Identify all Electrical Panel names (e.g., DB, LC, LP) in this document. Return only a comma-separated list."
                     scan_res = model.generate_content([google_file, scan_prompt])
-                    panel_names = [p.strip() for p in scan_res.text.split(',')]
-                    st.write(f"📋 ตรวจพบแผง: {', '.join(panel_names)}")
+                    panel_names = [p.strip() for p in scan_res.text.split(',') if p.strip()]
+                    st.write(f"📋 ตรวจพบแผงไฟฟ้า: {', '.join(panel_names)}")
 
-                # --- PHASE 2: Loop Extract per Panel ---
+                # --- PHASE 2: Loop Extract per Panel (Universal Accuracy) ---
                 all_results = []
                 progress_bar = st.progress(0)
                 
                 for idx, name in enumerate(panel_names):
-                    with st.spinner(f"⏳ Phase 2: กำลังสกัดข้อมูลแผง {name}..."):
+                    with st.spinner(f"⏳ Phase 2: กำลังสกัดข้อมูลแผง {name} อย่างละเอียด..."):
+                        # ปรับ Prompt ให้เป็นกลางและเน้นสังเกตทุกบรรทัด
                         extract_prompt = f"""
-                        Extract the Load Schedule for panel '{name}' from the PDF. 
-                        Rules:
-                        1. Look for symbols like (ELCB), (RCCB), or leakage protection.
-                        2. Identify MAIN BREAKER as the first row.
-                        3. Strictly follow the text in the drawing for each circuit.
+                        Extract the Load Schedule for panel '{name}' from the PDF.
+                        STRICT EXTRACTION RULES:
+                        1. **Line-by-Line Inspection**: Scan every circuit row for text or symbols indicating leakage protection (e.g., ELCB, RCCB, RCD, or explicit notes).
+                        2. **Device Classification**: If leakage protection is mentioned for a circuit, mark it as 'ELCB'. Otherwise, mark as 'Breaker'.
+                        3. **Main Breaker**: Identify and list the Main Breaker as the very first row of the panel.
+                        4. **Zero Assumptions**: Only extract what is visually present in the drawing. Do not guess based on circuit descriptions.
+                        
                         Format: PANEL | DEVICE | POLE | AMP | DESCRIPTION
                         """
                         response = model.generate_content([google_file, extract_prompt])
                         all_results.append(response.text)
-                        
-                        # Update Progress
                         progress_bar.progress((idx + 1) / len(panel_names))
 
                 # --- PHASE 3: Display Consolidated Result ---
-                st.markdown(f"### 📋 รายงานการสกัดข้อมูล (Version 1.7.0)")
+                st.markdown(f"### 📋 รายงานการสกัดข้อมูล (Version 1.9.0)")
                 final_output = "\n\n---\n\n".join(all_results)
                 st.code(final_output, language="text")
-                st.success(f"✅ สกัดครบทุกแผงด้วยความแม่นยำสูง (Model: {working_model})")
+                st.success(f"✅ สกัดครบทุกวงจรด้วยมาตรฐานเดียวกัน (Model: {working_model})")
 
                 google_file.delete()
             except Exception as e:
@@ -85,5 +86,4 @@ def main():
         else:
             st.warning("กรุณาอัปโหลดไฟล์ PDF")
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
