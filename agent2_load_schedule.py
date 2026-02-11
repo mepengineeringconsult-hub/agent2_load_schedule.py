@@ -1,5 +1,5 @@
 # CODE VERSION: 2.6.0
-# STATUS: Strict Extraction + No Auto-fill for Spare/Space + LC32 ELCB Fixed
+# STATUS: Full Scale Production + Auto Page Splitting + Strict Spare/Space Rule
 
 import streamlit as st
 import google.generativeai as genai
@@ -22,7 +22,7 @@ def find_available_model():
 def main():
     # รายงานชื่อแอปและเวอร์ชันที่หน้าจอ
     st.title("📑 Agent 2: Load Schedule Auditor version 2.6.0")
-    st.info("💡 Strict Mode: ห้ามใส่ค่า Spare เอง และเน้นความแม่นยำ ELCB รายบรรทัด")
+    st.info("💡 Strict Mode: แยกประมวลผลทีละหน้า + ห้ามเติมค่า Spare เอง + ตรวจละเอียด ELCB")
     st.markdown("---")
 
     api_key = st.secrets.get("API_KEY") or st.secrets.get("GEMINI_API_KEY")
@@ -33,58 +33,64 @@ def main():
 
     uploaded_file = st.file_uploader("อัปโหลดแบบ PDF (Load Schedule)", type="pdf")
 
-    if st.button("🔍 เริ่มสกัดข้อมูล (Strict Audit v2.6.0)", use_container_width=True):
+    if st.button("🔍 เริ่มสกัดข้อมูล (Audit v2.6.0)", use_container_width=True):
         if uploaded_file:
             try:
                 working_model = find_available_model()
                 if not working_model: return
                 model = genai.GenerativeModel(model_name=working_model)
 
+                # อ่าน PDF เพื่อแยกหน้า
                 pdf_reader = PdfReader(uploaded_file)
                 total_pages = len(pdf_reader)
-                
-                all_extracted_data = []
+                st.write(f"📄 ตรวจพบเอกสารทั้งหมด: {total_pages} หน้า")
+
+                all_results = []
                 progress_bar = st.progress(0)
                 status_text = st.empty()
 
                 for page_num in range(total_pages):
                     status_text.text(f"⏳ กำลังประมวลผลหน้าที่ {page_num + 1}/{total_pages}...")
                     
+                    # แยกหน้าปัจจุบันออกมาเป็นไบต์
                     writer = PdfWriter()
                     writer.add_page(pdf_reader.pages[page_num])
                     page_bytes = io.BytesIO()
                     writer.write(page_bytes)
                     page_bytes.seek(0)
 
-                    temp_page_fn = f"temp_v260_p{page_num}.pdf"
-                    with open(temp_page_fn, "wb") as f:
+                    # บันทึกไฟล์ชั่วคราวเพื่ออัปโหลด
+                    temp_fn = f"temp_p{page_num}_{int(time.time())}.pdf"
+                    with open(temp_fn, "wb") as f:
                         f.write(page_bytes.read())
                     
-                    google_file = genai.upload_file(path=temp_page_fn, mime_type="application/pdf")
+                    google_file = genai.upload_file(path=temp_fn, mime_type="application/pdf")
 
-                    # Prompt ที่ปรับปรุงตามคำสั่งล่าสุด
+                    # Prompt ที่รวมทุกประเด็นความถูกต้อง (Strict Rule)
                     extract_prompt = """
-                    Extract the Load Schedule from this page.
-                    CRITICAL RULES:
-                    1. **SPARE/SPACE Policy**: DO NOT provide Pole (P) or Amp (AT) for SPARE or SPACE circuits unless they are explicitly written in the table. If blank in the PDF, leave it blank in the output.
-                    2. **ELCB Detection**: Scan every row carefully. For Receptacle/Kitchen or any row with ELCB/RCCB symbols, the device MUST be 'ELCB'. Pay special attention to the last rows of LC32.
-                    3. **Zero Guessing**: Report exactly what you see. Do not fill in missing data based on assumptions.
+                    Extract the Load Schedule from this PDF page.
+                    STRICT EXTRACTION RULES:
+                    1. **SPARE/SPACE Restriction**: DO NOT provide Pole(P) or Amp(AT) for any SPARE or SPACE circuits unless they are explicitly written in the table. If blank in PDF, leave them blank.
+                    2. **ELCB Precision**: Every row must be scanned for (ELCB) or (RCCB) symbols in both Device and Description columns. If present, the device must be labeled 'ELCB'.
+                    3. **Zero Assumptions**: Only extract what is visually present in the drawing. Do not guess or auto-fill data.
                     4. **Format**: PAGE | PANEL | DEVICE | POLE | AMP | DESCRIPTION
                     """
                     
                     response = model.generate_content([google_file, f"PAGE: {page_num+1} | {extract_prompt}"])
-                    all_extracted_data.append(response.text)
+                    all_results.append(response.text)
 
+                    # Cleanup
                     google_file.delete()
-                    if os.path.exists(temp_page_fn): os.remove(temp_page_fn)
+                    if os.path.exists(temp_fn): os.remove(temp_fn)
                     progress_bar.progress((page_num + 1) / total_pages)
 
+                # แสดงผลลัพธ์รวม
                 st.markdown(f"### 📋 รายงานการสกัดข้อมูล (Version 2.6.0)")
-                st.code("\n\n---\n\n".join(all_extracted_data), language="text")
-                st.success(f"✅ ประมวลผลสำเร็จตามเงื่อนไข Strict Truth")
+                st.code("\n\n---\n\n".join(all_results), language="text")
+                st.success(f"✅ ประมวลผลสำเร็จครบทุกหน้าด้วยความแม่นยำรายบรรทัด")
 
             except Exception as e:
-                st.error(f"❌ เกิดข้อผิดพลาด: {str(e)}")
+                st.error(f"❌ Error: {str(e)}")
         else:
             st.warning("กรุณาอัปโหลดไฟล์ PDF")
 
