@@ -1,5 +1,5 @@
 # CODE VERSION: 2.7.0
-# STATUS: Production Ready + Page Splitting + Strict ELCB & Spare Rules
+# STATUS: Full Scale Production + Page-by-Page Precision + Strict ELCB/Spare Rules
 
 import streamlit as st
 import google.generativeai as genai
@@ -20,8 +20,9 @@ def find_available_model():
         return None
 
 def main():
+    # แสดงชื่อแอปและเวอร์ชันบนหน้าจอ Streamlit
     st.title("📑 Agent 2: Load Schedule Auditor version 2.7.0")
-    st.info("💡 Strict Mode: แยกหน้าประมวลผลอัตโนมัติ + ตรวจละเอียด ELCB 3 วงจรสุดท้าย LC32")
+    st.info("💡 Strict Mode: สแกนละเอียดทีละหน้า + ห้ามเติม Spare เอง + ตรวจเข้ม ELCB 3 วงจรท้าย LC32")
     st.markdown("---")
 
     api_key = st.secrets.get("API_KEY") or st.secrets.get("GEMINI_API_KEY")
@@ -32,7 +33,7 @@ def main():
 
     uploaded_file = st.file_uploader("อัปโหลดแบบ PDF (Load Schedule)", type="pdf")
 
-    if st.button("🔍 เริ่มสกัดข้อมูลแม่นยำสูง (Audit v2.7.0)", use_container_width=True):
+    if st.button("🔍 เริ่มสกัดข้อมูลแม่นยำสูงสุด (Audit v2.7.0)", use_container_width=True):
         if uploaded_file:
             try:
                 working_model = find_available_model()
@@ -62,26 +63,27 @@ def main():
                     
                     google_file = genai.upload_file(path=temp_fn, mime_type="application/pdf")
 
-                    # ชุดคำสั่งที่เน้นย้ำความผิดพลาดที่เคยเกิดขึ้น
+                    # ชุดคำสั่งที่เน้นย้ำประเด็นความถูกต้องรายบรรทัด
                     extract_prompt = """
-                    Extract the Load Schedule from this PDF page with 100% accuracy.
-                    STRICT RULES:
-                    1. **ELCB Mandatory Check**: Every circuit, especially for 'Receptacle' or 'Kitchen', must be checked for (ELCB) symbols. If found anywhere in the row, the DEVICE column must be 'ELCB'.
-                    2. **LC32 Specific**: Ensure circuits 14, 16, and 18 are correctly identified as ELCB.
-                    3. **SPARE/SPACE Restriction**: DO NOT assign Pole (P) or Amp (AT) to SPARE/SPACE rows unless explicitly written in the PDF table. Leave blank if not found.
+                    Extract the Load Schedule from this PDF page.
+                    STRICT RULES FOR 100% ACCURACY:
+                    1. **ELCB Mandatory Audit**: You must scan every row for (ELCB) or (RCCB) markings in BOTH the Device and Description columns. If found, the DEVICE MUST be 'ELCB'.
+                    2. **LC32 Final Circuits**: Pay special attention to the last rows (14, 16, 18). If they have ELCB symbols, they MUST NOT be Circuit Breakers.
+                    3. **SPARE/SPACE Data Integrity**: DO NOT auto-fill Pole (P) or Amp (AT) for SPARE/SPACE rows. Only report what is explicitly written in the PDF. Leave blank if the table is blank.
                     4. **Format**: PAGE | PANEL | DEVICE | POLE | AMP | DESCRIPTION
                     """
                     
-                    response = model.generate_content([google_file, f"PAGE: {page_num+1} | {extract_prompt}"])
+                    response = model.generate_content([google_file, f"PAGE_REF: {page_num+1} | {extract_prompt}"])
                     all_results.append(response.text)
 
+                    # Cleanup
                     google_file.delete()
                     if os.path.exists(temp_fn): os.remove(temp_fn)
                     progress_bar.progress((page_num + 1) / total_pages)
 
                 st.markdown(f"### 📋 รายงานการสกัดข้อมูล (Version 2.7.0)")
                 st.code("\n\n---\n\n".join(all_results), language="text")
-                st.success(f"✅ ประมวลผลสำเร็จด้วยมาตรฐานความถูกต้องรายหน้า")
+                st.success(f"✅ ประมวลผลสำเร็จด้วยมาตรฐานความแม่นยำรายแผ่น")
 
             except Exception as e:
                 st.error(f"❌ Error: {str(e)}")
